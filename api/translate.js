@@ -1,9 +1,12 @@
+import fetch from 'node-fetch';
+import FormData from 'form-data';
+
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '10mb', // audio can be big
-    },
-  },
+      sizeLimit: '10mb'
+    }
+  }
 };
 
 export default async function handler(req, res) {
@@ -12,29 +15,64 @@ export default async function handler(req, res) {
 
   try {
     // Decode base64 to binary buffer
-    const audioBuffer = Buffer.from(audio, 'base64');
+    const buffer = Buffer.from(audio, 'base64');
 
-    // Step 1: Transcription (Japanese speech to Japanese text)
-    const formData = new FormData();
-    formData.append('file', new Blob([audioBuffer], { type: 'audio/webm' }), 'audio.webm');
-    formData.append('model', 'whisper-1');
-    formData.append('language', 'ja');
+    // Prepare form data for Whisper API
+    const form = new FormData();
+    form.append('file', buffer, {
+      filename: 'audio.webm',
+      contentType: 'audio/webm',
+    });
+    form.append('model', 'whisper-1');
+    form.append('language', 'ja');
 
-    const transcriptionRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        ...form.getHeaders(),
       },
-      body: formData,
+      body: form,
     });
 
-    const transcriptionData = await transcriptionRes.json();
-    const jpText = transcriptionData.text;
+    const whisperData = await whisperRes.json();
 
-    // Step 2: Translate (Japanese text → Chinese)
-    const translationRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    if (!whisperData.text) {
+      throw new Error('Transcription failed');
+    }
+
+    // Translate from Japanese to Chinese
+    const chatRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: '你是一位專業翻譯，請將以下日文翻譯成自然流暢的中文。只回覆翻譯後的內容。'
+          },
+          {
+            role: 'user',
+            content: whisperData.text
+          }
+        ]
+      })
+    });
+
+    const chatData = await chatRes.json();
+    const translated = chatData.choices?.[0]?.message?.content ?? "翻譯失敗";
+
+    res.status(200).json({ translation: translated });
+  } catch (err) {
+    console.error('[Translation Error]', err);
+    res.status(500).json({ translation: '翻譯失敗' });
+  }
+}
+
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
